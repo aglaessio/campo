@@ -60,7 +60,7 @@ async function loadAccount(){
     for(const [array,key] of [[modules,'modules'],[lessons,'lessons'],[references,'references'],[glossary,'glossary'],[cases,'cases']]){if(!Array.isArray(content[key]))throw Error('Conteúdo inválido.');array.push(...content[key]);}
     const saved=results[1].data;if(saved)Object.assign(state,importState({format:'campo-course-progress',version:1,state:saved.data}));
     cloud.revision=saved?.revision||0;cloud.lastSaved=JSON.stringify(state);cloud.admin=!!results[2].data;cloud.ready=true;accountChrome();
-    const target=location.hash;if(!target||target.includes('access_token')||target.includes('type='))history.replaceState(null,'',`#aula-${state.lastLesson}`);
+    const target=location.hash;if(!target||target==='#inicio'||target.includes('access_token')||target.includes('type='))history.replaceState(null,'',`#aula-${state.lastLesson}`);
     render();saveStatus('Avanço salvo na nuvem');
     cloud.refreshTimer=setInterval(()=>verifyAccess(),30000);
   }catch{
