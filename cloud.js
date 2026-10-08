@@ -1,7 +1,7 @@
 /* Authentication uses the official SDK; all authorizations are enforced by RLS. */
-const cloud={client:null,user:null,ready:false,admin:false,revision:0,epoch:0,dirty:false,saving:false,savingEpoch:0,conflict:false,timer:null,lastSaved:'',authMode:'login',refreshTimer:null};
+const cloud={client:null,user:null,ready:false,admin:false,revision:0,epoch:0,dirty:false,saving:false,savingEpoch:0,savePromise:null,conflict:false,timer:null,lastSaved:'',authMode:'login',refreshTimer:null};
 const baseRender=render;
-const emptyProgress=()=>({completed:[],practice:[],passed:[],notes:{},checks:[],lastLesson:0,labDone:[],labTests:{}});
+const emptyProgress=()=>({visited:[],completed:[],practice:[],passed:[],notes:{},checks:[],lastLesson:0,labDone:[],labTests:{}});
 const config=window.CAMPO_CONFIG;
 let pendingPassword=/type=(invite|recovery)/.test(location.hash);
 function saveStatus(message,error=false){$('#cloud-save-status').textContent=message;$('#cloud-save-status').classList.toggle('save-error',error);}
@@ -61,7 +61,7 @@ async function loadAccount(){
     const saved=results[1].data;if(saved)Object.assign(state,importState({format:'campo-course-progress',version:1,state:saved.data}));
     cloud.revision=saved?.revision||0;cloud.lastSaved=JSON.stringify(state);cloud.admin=!!results[2].data;cloud.ready=true;accountChrome();
     const target=location.hash;if(!target||target==='#inicio'||target.includes('access_token')||target.includes('type='))history.replaceState(null,'',`#aula-${state.lastLesson}`);
-    render();saveStatus('Avanço salvo na nuvem');
+    render();if(!cloud.dirty&&!cloud.saving)saveStatus(saved?'Avanço salvo na nuvem':'Conta conectada');
     cloud.refreshTimer=setInterval(()=>verifyAccess(),30000);
   }catch{
     if(epoch!==cloud.epoch)return;clearContent();authPage('blocked','Não foi possível carregar o curso. Atualize a página para tentar novamente.');
@@ -78,24 +78,30 @@ async function verifyAccess(){
 render=function(scroll=true){
   if(!cloud.ready)return;
   if(location.hash==='#admin'){
-    if(cloud.admin){renderAdmin();return;}
+    if(cloud.admin){renderNav();renderCourseChrome();$('#sidebar').classList.remove('open');$('#menu-toggle').setAttribute('aria-expanded','false');scheduleSave();renderAdmin();return;}
     history.replaceState(null,'','#inicio');
   }
-  baseRender(scroll);renderIcons();
+  baseRender(scroll);renderCourseChrome();
   if($('#lesson-note'))$('#lesson-note').maxLength=4000;
   document.querySelectorAll('.study-aside p').forEach(p=>{if(p.textContent.startsWith('Salve seu avanço'))p.textContent='Seu avanço e suas anotações são salvos automaticamente na sua conta.';});
-  document.querySelectorAll('.admin-button').forEach(link=>link.remove());
-  if(cloud.admin){const link=document.createElement('a');link.href='#admin';link.className='button secondary admin-button';link.textContent='Gerenciar alunos';$('.sidebar-bottom').append(link);}
   scheduleSave();
 };
+function renderCourseChrome(){
+  renderIcons();document.querySelectorAll('.admin-button').forEach(link=>link.remove());
+  if(cloud.admin){const link=document.createElement('a');link.href='#admin';link.className='button secondary admin-button';link.textContent='Gerenciar alunos';$('.sidebar-bottom').append(link);}
+}
 function scheduleSave(){
   if(!cloud.ready||cloud.conflict)return;
-  const snapshot=JSON.stringify(state);if(snapshot===cloud.lastSaved)return;
+  const snapshot=JSON.stringify(state);if(snapshot===cloud.lastSaved&&!cloud.saving){cloud.dirty=false;clearTimeout(cloud.timer);return;}
   cloud.dirty=true;saveStatus('Alterações aguardando salvamento');clearTimeout(cloud.timer);
   cloud.timer=setTimeout(()=>flushProgress(),800);
 }
-async function flushProgress(){
-  if(!cloud.ready||cloud.saving||cloud.conflict||!cloud.dirty)return;
+function flushProgress(){
+  if(cloud.saving)return cloud.savePromise;
+  if(!cloud.ready||cloud.conflict||!cloud.dirty)return Promise.resolve();
+  cloud.savePromise=saveProgressSnapshot();return cloud.savePromise;
+}
+async function saveProgressSnapshot(){
   const epoch=cloud.epoch,userId=cloud.user.id,snapshot=JSON.stringify(state);cloud.saving=true;cloud.savingEpoch=epoch;cloud.dirty=false;saveStatus('Salvando avanço...');
   try{
     const {data,error}=await cloud.client.rpc('save_course_progress',{course_key:config.courseId,expected_revision:cloud.revision,progress_data:JSON.parse(snapshot)});
@@ -109,7 +115,7 @@ async function flushProgress(){
       }
       throw error;
     }
-    cloud.revision=data;cloud.lastSaved=snapshot;saveStatus('Avanço salvo na nuvem');cloudNotice('');
+    cloud.revision=data;cloud.lastSaved=snapshot;cloud.dirty=JSON.stringify(state)!==snapshot;saveStatus(cloud.dirty?'Alterações aguardando salvamento':'Avanço salvo na nuvem');cloudNotice('');
   }catch{
     if(epoch!==cloud.epoch)return;cloud.dirty=true;saveStatus('Avanço ainda não salvo',true);
     cloudNotice('Não foi possível salvar. Suas alterações continuam nesta tela; tente novamente ou baixe uma cópia.',{label:'Tentar salvar novamente',run:()=>flushProgress()});
@@ -137,7 +143,7 @@ async function adminRequest(action,fields={}){
 async function renderAdmin(){
   if(!cloud.ready||!cloud.admin)return;
   $('#breadcrumb').textContent='Administração / Alunos';
-  $('#main').innerHTML=heading('ADMINISTRAÇÃO','Alunos e convites','Gerencie quem pode acessar o curso. Remover acesso preserva o histórico do aluno.')+`<form class="admin-invite" id="invite-form"><label>E-mail do novo aluno<input name="email" type="email" required maxlength="254" placeholder="aluno@exemplo.com"></label><button class="button">Enviar convite</button></form><div id="admin-feedback" role="status"></div><div class="admin-page-meta"><p id="admin-summary">Carregando alunos...</p><button class="button secondary" id="refresh-users">Atualizar lista</button></div><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Aluno</th><th>Acesso</th><th>Avanço</th><th>Último avanço</th><th>Ação</th></tr></thead><tbody id="admin-users"></tbody></table></div><dialog class="confirm-dialog" id="access-confirm"><h2 id="confirm-title"></h2><p id="confirm-description"></p><div class="confirm-actions"><button class="button secondary" id="cancel-access">Cancelar</button><button class="button" id="confirm-access">Confirmar</button></div></dialog>`;
+  $('#main').innerHTML=heading('ADMINISTRAÇÃO','Alunos e convites','Gerencie quem pode acessar o curso. Remover acesso preserva o histórico do aluno.')+`<form class="admin-invite" id="invite-form"><label>E-mail do novo aluno<input name="email" type="email" required maxlength="254" placeholder="aluno@exemplo.com"></label><button class="button">Enviar convite</button></form><div id="admin-feedback" role="status"></div><div class="admin-page-meta"><p id="admin-summary">Carregando alunos...</p><button class="button secondary" id="refresh-users">Atualizar lista</button></div><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Aluno</th><th>Acesso</th><th>Progresso salvo</th><th>Último salvamento</th><th>Ação</th></tr></thead><tbody id="admin-users"></tbody></table></div><dialog class="confirm-dialog" id="access-confirm"><h2 id="confirm-title"></h2><p id="confirm-description"></p><div class="confirm-actions"><button class="button secondary" id="cancel-access">Cancelar</button><button class="button" id="confirm-access">Confirmar</button></div></dialog>`;
   const delivery=document.createElement('fieldset');delivery.className='invite-delivery';delivery.innerHTML='<legend>Forma de convite</legend><label><input type="radio" name="delivery" value="link" checked> Gerar link</label><label><input type="radio" name="delivery" value="email"> Enviar e-mail</label>';
   $('#invite-form').insertBefore(delivery,$('button',$('#invite-form')));$('button',$('#invite-form')).textContent='Criar convite';
   $('#invite-form').addEventListener('submit',async e=>{
@@ -160,9 +166,12 @@ async function renderAdmin(){
 async function listStudents(){
   const target=$('#admin-users');if(!target)return;
   try{
+    clearTimeout(cloud.timer);await flushProgress();
+    if(cloud.dirty&&!cloud.conflict)await flushProgress();
+    if(!target.isConnected||!cloud.ready||!cloud.admin)return;
     const result=await adminRequest('list');if(!target.isConnected)return;
-    $('#admin-summary').textContent=`${result.users.length} alunos · ${result.users.filter(u=>u.status==='active').length} com acesso ativo`;
-    target.innerHTML=result.users.length?result.users.map(u=>`<tr><td>${esc(u.email)}${u.is_admin?'<br><small>Administrador</small>':''}</td><td><span class="access-status ${u.status==='revoked'?'revoked':''}">${u.status==='active'?'Ativo':'Removido'}</span></td><td>${u.completed}/32 · ${Math.round(u.completed/32*100)}%</td><td>${u.updated_at?esc(new Date(u.updated_at).toLocaleDateString('pt-BR')):'Sem avanço'}</td><td>${u.is_admin?'Conta protegida':`<button data-user="${esc(u.user_id)}" data-action="${u.status==='active'?'revoke':'restore'}" class="${u.status==='active'?'revoke':''}">${u.status==='active'?'Remover acesso':'Restaurar acesso'}</button>`}</td></tr>`).join(''):'<tr><td colspan="5">Nenhum aluno convidado.</td></tr>';
+    $('#admin-summary').textContent=`${result.users.length} ${result.users.length===1?'aluno':'alunos'} · ${result.users.filter(u=>u.status==='active').length} com acesso ativo${cloud.dirty?' · Avanço local pendente de salvamento':''}`;
+    target.innerHTML=result.users.length?result.users.map(u=>`<tr><td>${esc(u.email)}${u.is_admin?'<br><small>Administrador</small>':''}</td><td><span class="access-status ${u.status==='revoked'?'revoked':''}">${u.status==='active'?'Ativo':'Removido'}</span></td><td>${u.completed}/32 concluídas · ${u.percent??Math.round(u.completed/32*100)}%<small class="progress-detail">${u.visited??0}/32 visitadas · Última aula: ${Number.isInteger(u.lastLesson)?u.lastLesson+1:'-'}</small></td><td>${u.updated_at?esc(new Date(u.updated_at).toLocaleDateString('pt-BR')):'Sem avanço'}</td><td>${u.is_admin?'Conta protegida':`<button data-user="${esc(u.user_id)}" data-action="${u.status==='active'?'revoke':'restore'}" class="${u.status==='active'?'revoke':''}">${u.status==='active'?'Remover acesso':'Restaurar acesso'}</button>`}</td></tr>`).join(''):'<tr><td colspan="5">Nenhum aluno convidado.</td></tr>';
     target.querySelectorAll('[data-user]').forEach(button=>button.addEventListener('click',()=>confirmAccess(button.dataset.user,button.dataset.action,result.users.find(u=>u.user_id===button.dataset.user).email)));
   }catch(error){if($('#admin-feedback'))$('#admin-feedback').textContent=error.message;}
 }
