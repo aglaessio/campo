@@ -180,7 +180,10 @@ async function startPrivateCourse(){
     if(config.publicKey.startsWith('eyJ')){const payload=JSON.parse(atob(config.publicKey.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));if(payload.role!=='anon')throw Error('Use apenas a chave pública anon.');}
     if(!window.supabase?.createClient)throw Error('SDK indisponível.');
     cloud.client=window.supabase.createClient(config.supabaseUrl,config.publicKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
-    cloud.client.auth.onAuthStateChange((event)=>{
+    cloud.client.auth.onAuthStateChange((event,session)=>{
+      if(event==='SIGNED_IN'&&cloud.user&&session?.user?.id!==cloud.user.id){
+        ++cloud.epoch;clearContent();cloud.user=null;authPage();setTimeout(()=>loadAccount(),0);
+      }
       if(event==='PASSWORD_RECOVERY'){pendingPassword=true;setTimeout(()=>loadAccount(),0);}
       if(event==='SIGNED_OUT'){++cloud.epoch;cloud.user=null;clearContent();authPage();}
     });
